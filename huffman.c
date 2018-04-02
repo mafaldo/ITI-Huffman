@@ -1,10 +1,22 @@
 // Bibliotecas
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <limits.h>
 
 // Define o tamanho de alfabeto utilizado
 #define  ALPHABET_SIZE 256
+
+#define BINARY_PATTERN "%c%c%c%c%c%c%c%c"
+#define BYTE_TO_BINARY(byte)  \
+  (byte & 0x80 ? '1' : '0'), \
+  (byte & 0x40 ? '1' : '0'), \
+  (byte & 0x20 ? '1' : '0'), \
+  (byte & 0x10 ? '1' : '0'), \
+  (byte & 0x08 ? '1' : '0'), \
+  (byte & 0x04 ? '1' : '0'), \
+  (byte & 0x02 ? '1' : '0'), \
+  (byte & 0x01 ? '1' : '0') 
 
 // Protótipo das estruturas
 struct Node;
@@ -61,7 +73,7 @@ int main(int argc, char **argv) {
 
 	// Comando para descompressão
 	else if (argv[1][0] == 'd' && argv[1][1] == '\0') {		
-		if (argc == 3) {
+		if (argc == 4) {
 			// Descomprime arquivo selecionado
 			decompress(argv[2], argv[3]);
 		}
@@ -95,6 +107,7 @@ struct HuffmanTree {
 								// é so acessar leaf[byte], já que o byte varia de 0 a 255.
 								// Se o byte em questão não fizer parte da árvore, o ponteiro
 								// leaf[byte] aponta para NULL.
+	unsigned int validLeafs;	// Número de folhas válidas
 };
 
 // Cria um nó
@@ -204,7 +217,8 @@ struct HuffmanTree *buildHuffmanTree(unsigned long frequencies[]) {
 	}
 	// A raiz da árvore está na primeira posição das raizes das ávores temporárias
 	huffman->root = tmpRoots[0];
-	free(tmpRoots);					
+	huffman->validLeafs = validLeafs;
+	free(tmpRoots);
 	return huffman;
 }
 
@@ -388,7 +402,7 @@ void compress(char *ifilename, char *ofilename) {
 		
 		// gera nova arvore de huffman
 		frequencies[byte]--;
-		//freeHuffmanTree(&huffman);
+		freeHuffmanTree(&huffman);
 	}
 
 	if (paddingBits < 8) {
@@ -402,6 +416,98 @@ void compress(char *ifilename, char *ofilename) {
 	fclose(output);
 }
 
-void decompress(char *ifilename, char *ofilename) {
+bool isLeaf(struct Node *n) {
+	if ((n->left == NULL) && (n->right == NULL))
+		return true;
+	else
+		return false;
+}
+
+void decode(FILE *input, FILE *output, unsigned long frequencies[]) {
+	unsigned char byteRead = 0;
+	unsigned char byteDecoded = 0;
+	unsigned char shiftedBits = 0;
+	unsigned char buffer = 0;
+	unsigned int  validLeafs = 0;
+	struct HuffmanTree *huffman;
+	struct Node *actualNode;
+
+	huffman = buildHuffmanTree(frequencies);	// Constroi árvore de Huffman pela primeira vez
+	actualNode = huffman->root;					// Atribui o nó atual a raiz da árvore
+	validLeafs = huffman->validLeafs;
 	
+	// Lê byte no arquivo de entrada
+	while (fread(&byteRead, 1, 1, input)) {
+		buffer |= (byteRead >> shiftedBits);
+
+		while (!isLeaf(actualNode) && (shiftedBits < 8)) {
+			printf("byteRead: ");
+			printf(BINARY_PATTERN, BYTE_TO_BINARY(byteRead));
+			printf("\tbuffer: ");
+			printf(BINARY_PATTERN, BYTE_TO_BINARY(buffer));
+			printf("\n");
+
+			if ((buffer & 0x80) == 0)
+				actualNode = actualNode->left;
+			else if ((buffer & 0x80) == 1)
+				actualNode = actualNode->right;
+			
+			buffer <<= 1;
+			shiftedBits++;
+		}
+
+		if (isLeaf(actualNode)) {
+			byteDecoded = actualNode->byte;
+			printf("byte descomprimido: %c\n", byteDecoded);
+			fwrite(&byteDecoded, 1, 1, output);			
+
+			freeHuffmanTree(&huffman);					// Limpa árvore de Huffman	
+			frequencies[byteDecoded]--;					// Atualiza array de frequências
+
+			if (frequencies[byteDecoded] == 0) 		// Verifica se a frequencia chegou a zero
+				validLeafs--;						// Se sim, decrementa o número de folhas validas
+			if (validLeafs == 0)					// Caso o número de folhas validas seja zero então a 
+				break;								// descompressão terminou... (isso faz que não seja
+													// necessário usar os bits de padding)
+
+			huffman = buildHuffmanTree(frequencies);	// Reconstroi árvore de Huffman	
+			actualNode = huffman->root;
+			//buffer <<= shiftedBits;
+			//shiftedBits = 0;
+		}
+	}
+}
+
+void decompress(char *ifilename, char *ofilename) {
+	unsigned char paddingBits = 0;
+	unsigned char headerFreqFieldSize; 
+	unsigned long frequencies[ALPHABET_SIZE];
+	int i;
+
+	FILE *input;
+	FILE *output;
+
+	if ((input = fopen(ifilename, "rb")) == NULL) {
+		printf("Erro ao abrir o arquivo de entrada\n");
+		printf("Abortando programa...\n");
+		exit(1);
+	}
+
+	if ((output = fopen(ofilename, "wb")) == NULL) {
+		printf("Erro ao abrir o arquivo de saída\n");
+		printf("Abortando programa...\n");
+		exit(1);
+	}
+
+	fread(&paddingBits, 1, 1, input);
+	fread(&headerFreqFieldSize, 1, 1, input);
+	for (i = 0; i < ALPHABET_SIZE; i++) {
+		// É necessário zerar o valor antes, pois, caso contrário, os bytes
+		// exedentes podem possuir qualquer valor e o valor final não será
+		// o valor real.
+		frequencies[i] = 0;
+		fread(&frequencies[i], headerFreqFieldSize, 1, input);
+	}
+
+	decode(input, output, frequencies);
 }

@@ -64,9 +64,9 @@ int main (int argc, char **argv) {
 	}
 	printf("\n=== COMPRESSED FILE ===\n");
 
-/*	while (fread(&byte, 1, 1, fp)) {
+	while (fread(&byte, 1, 1, fp)) {
 		printf(BYTE_TO_BINARY_PATTERN, BYTE_TO_BINARY(byte));
-	}*/
+	}
 	printf("\n");
 	fclose(fp);
 	
