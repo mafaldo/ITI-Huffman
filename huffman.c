@@ -436,46 +436,41 @@ void decode(FILE *input, FILE *output, unsigned long frequencies[]) {
 	actualNode = huffman->root;					// Atribui o nó atual a raiz da árvore
 	validLeafs = huffman->validLeafs;
 	
-	// Lê byte no arquivo de entrada
-	while (fread(&byteRead, 1, 1, input)) {
-		buffer |= (byteRead >> shiftedBits);
+	fread(&byteRead, 1, 1, input);
+	buffer = byteRead;
 
-		while (!isLeaf(actualNode) && (shiftedBits < 8)) {
-			printf("byteRead: ");
-			printf(BINARY_PATTERN, BYTE_TO_BINARY(byteRead));
-			printf("\tbuffer: ");
-			printf(BINARY_PATTERN, BYTE_TO_BINARY(buffer));
-			printf("\n");
-
-			if ((buffer & 0x80) == 0)
+	do {
+		do {
+			if ((buffer >> 7 & 0x01) == 0)
 				actualNode = actualNode->left;
-			else if ((buffer & 0x80) == 1)
+			if ((buffer >> 7 & 0x01) == 1)
 				actualNode = actualNode->right;
-			
 			buffer <<= 1;
 			shiftedBits++;
-		}
+		} while (!isLeaf(actualNode) && (shiftedBits < 8));
 
 		if (isLeaf(actualNode)) {
 			byteDecoded = actualNode->byte;
-			printf("byte descomprimido: %c\n", byteDecoded);
-			fwrite(&byteDecoded, 1, 1, output);			
-
+			fwrite(&byteDecoded, 1, 1, output);
 			freeHuffmanTree(&huffman);					// Limpa árvore de Huffman	
 			frequencies[byteDecoded]--;					// Atualiza array de frequências
 
-			if (frequencies[byteDecoded] == 0) 		// Verifica se a frequencia chegou a zero
-				validLeafs--;						// Se sim, decrementa o número de folhas validas
-			if (validLeafs == 0)					// Caso o número de folhas validas seja zero então a 
-				break;								// descompressão terminou... (isso faz que não seja
-													// necessário usar os bits de padding)
+			if (frequencies[byteDecoded] == 0)
+				validLeafs--;
+			if (validLeafs == 0)
+				return;
 
 			huffman = buildHuffmanTree(frequencies);	// Reconstroi árvore de Huffman	
-			actualNode = huffman->root;
-			//buffer <<= shiftedBits;
-			//shiftedBits = 0;
+			actualNode = huffman->root;			
 		}
-	}
+				
+		if (shiftedBits == 8) {
+			shiftedBits = 0;
+			fread(&byteRead, 1, 1, input);
+			buffer = byteRead;
+		}
+
+	} while (shiftedBits < 8);
 }
 
 void decompress(char *ifilename, char *ofilename) {
@@ -510,4 +505,7 @@ void decompress(char *ifilename, char *ofilename) {
 	}
 
 	decode(input, output, frequencies);
+
+	fclose(input);
+	fclose(output);
 }
