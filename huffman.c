@@ -7,16 +7,8 @@
 // Define o tamanho de alfabeto utilizado
 #define  ALPHABET_SIZE 256
 
-#define BINARY_PATTERN "%c%c%c%c%c%c%c%c"
-#define BYTE_TO_BINARY(byte)  \
-  (byte & 0x80 ? '1' : '0'), \
-  (byte & 0x40 ? '1' : '0'), \
-  (byte & 0x20 ? '1' : '0'), \
-  (byte & 0x10 ? '1' : '0'), \
-  (byte & 0x08 ? '1' : '0'), \
-  (byte & 0x04 ? '1' : '0'), \
-  (byte & 0x02 ? '1' : '0'), \
-  (byte & 0x01 ? '1' : '0') 
+// Exibe mensagens durante a execução, caso esteja definada
+#define VERBOSE 
 
 // Protótipo das estruturas
 struct Node;
@@ -25,12 +17,15 @@ struct HuffmanTree;
 // Protótipo das funções
 struct Node *createNode(unsigned char byte, unsigned long freq);
 struct Node *joinNodes(struct Node *left, struct Node *right);
+bool isLeaf(struct Node *n);
 struct HuffmanTree *buildHuffmanTree(unsigned long frequencies[]);
 void freeHuffmanTree(struct HuffmanTree **huffman);
+void huffmanCodes(struct HuffmanTree *huffman);
+void encode(FILE *input, FILE *output, unsigned long frequencies[]);
 void compress(char *ifilename, char *ofilename);
+void decode(FILE *input, FILE *output, unsigned long frequencies[]);
 void decompress(char *ifilename, char *ofilename);
 
-// Função principal
 int main(int argc, char **argv) {
 
 	// Formato do comando para compressão
@@ -138,6 +133,14 @@ struct Node *joinNodes(struct Node *left, struct Node *right) {
 	return new;	
 }
 
+// Verifica se o nó é uma folha
+bool isLeaf(struct Node *n) {
+	if ((n->left == NULL) && (n->right == NULL))
+		return true;
+	else
+		return false;
+}
+
 // Constroi a árvore de Huffman a partir de um array com as frequências para cada byte
 // onde a posição do array representa o byte.
 struct HuffmanTree *buildHuffmanTree(unsigned long frequencies[]) {
@@ -172,15 +175,16 @@ struct HuffmanTree *buildHuffmanTree(unsigned long frequencies[]) {
 	for (i = 1; i < ALPHABET_SIZE; i++) {
 		tmp = tmpRoots[i];
 		for (j = i - 1; j >= 0; j--) {
-			if (tmp == NULL) {
+				if (tmp == NULL) {
 				break;
 			}
 			else if (tmpRoots[j] == NULL) {
 				tmpRoots[j+1] = tmpRoots[j];
 			}
 			else {
-				if (tmp->freq > tmpRoots[j]->freq)
+				if (tmp->freq > tmpRoots[j]->freq) {
 					tmpRoots[j+1] = tmpRoots[j];
+				}
 				else 
 					break;
 			}
@@ -203,7 +207,7 @@ struct HuffmanTree *buildHuffmanTree(unsigned long frequencies[]) {
 		tmpRoots[i] = NULL;
 
 		// ordena esse novo nó criado, caso exista mais de um no array
-		if (i >= 1) {
+		if (i > 0) {
 			for (j = i - 1; j > 0 ; j--) {	// conferir se é pra ser 0 ou 1 aqui...
 				if (tmpRoots[j]->freq > tmpRoots[j-1]->freq) {
 					tmp = tmpRoots[j];
@@ -259,8 +263,8 @@ void huffmanCodes(struct HuffmanTree *huffman) {
 	printf("sym   freq   code\n");
 	for (i = 0; i < ALPHABET_SIZE; i++) {
 		if (huffman->leaf[i] != NULL) {		// Caso a folha exista
-			//printf("%3d - ", i);			// utilizar essa versão para arquivos no geral
-			printf("[%c] - ", i);			// utilizar essa versão para arquivos de texto
+			printf("%3d - ", i);			// utilizar essa versão para arquivos no geral
+			//printf("[%c] - ", i);			// utilizar essa versão para arquivos de texto
 			printf("%4lu - ", huffman->leaf[i]->freq);
 			printCode(huffman->leaf[i], NULL);
 			printf("\n");
@@ -268,69 +272,112 @@ void huffmanCodes(struct HuffmanTree *huffman) {
 	}
 }
 
-// Codiga um byte. É necessário que o valor passado para code e bits sejam 0 inicialmente.
-// O nó n deve ser a folha que corresponde ao byte que se quer achar o código e prev precisa
-// ser NULL. Esta função percorre da folha até a raiz e então faz o caminho de volta, atribuindo
-// o valor do código.
-void encode(unsigned int *code, unsigned char *bits, struct Node *n, struct Node *prev) {
-	if (n != NULL) {
-		encode(code, bits, n->parent, n);
-		if (prev != NULL) {
-			if (n->left == prev) {
-				// Adiciona 0
-				*code <<= 1;
+// Encodifica os bytes do arquivo
+void encode(FILE *input, FILE *output, unsigned long frequencies[]) {
+	// Função recursiva utilizada para obter o código de determinado byte e o tamanho desse código
+	// É necessário que o valor de code e codeSize sejam zerados antes de serem passados para função.
+	// O valor passado para n deve ser o da folha que se quer obter o código e prev deve ser NULL para
+	// que a lógica funcione. A função percorre da folha até a raiz da árvore e depois volta para a folha,
+	// obtendo o código. 
+	void getCode(unsigned int *code, unsigned char *codeSize, struct Node *n, struct Node *prev) {
+		if (n != NULL) {
+			getCode(code, codeSize, n->parent, n);
+			if (prev != NULL) {
+				if (n->left == prev) {
+					*code <<= 1;				// Adiciona 0 ao código
+				}
+				else if (n->right == prev) {
+					*code <<= 1;				// Adiciona 1 ao código
+					*code |= 1;
+				}
+				(*codeSize)++;
 			}
-			else if (n->right == prev) {
-				// Adiciona 1
-				*code <<= 1;
-				*code |= 1;
+		}	
+	}
+
+	unsigned int  code = 0;				// Código do byte lido
+	unsigned char codeSize = 0;			// Tamanho do código em bits
+	unsigned char byteRead = 0;			// Byte lido no arquivo de entrada
+	unsigned char buffer = 0;			// Buffer utilizado para gravar no arquivo de saída
+	unsigned char freeBufferBits = 8;	// Variável que indica
+	struct HuffmanTree *huffman;		// Árvore de Huffman
+
+	while (fread(&byteRead, 1, 1, input)) {
+		huffman = buildHuffmanTree(frequencies);		// Constroi árvore
+
+		code = 0;													// Zera código
+		codeSize = 0;												// Zera tamanho do código
+		getCode(&code, &codeSize, huffman->leaf[byteRead], NULL);	// Obtém código do byte lido
+	
+		while (true) {
+			// Caso a quantidade de bits livres no buffer seja maior que o tamanho do código,
+			// então o código pode ser copiado no buffer, mas é necessário sair do loop (por isso 
+			// o break) para ler um novo byte e continuar o procedimento
+			if (freeBufferBits > codeSize) {
+				buffer |= code << (freeBufferBits - codeSize);
+				freeBufferBits -= codeSize;
+				break;
 			}
-			(*bits)++;
+			// Caso a quandidade de bits livres no buffer seja menor ou igual que o tamanho do
+			// código, isso significa que o buffer será totalmente preenchido e que ele pode ser 
+			// gravado no arquivo de saída
+			else if (freeBufferBits <= codeSize) {
+				buffer |= code >> (codeSize - freeBufferBits);
+				codeSize -= freeBufferBits;
+				fwrite(&buffer, 1, 1, output);
+				freeBufferBits = 8;
+				buffer = 0;
+			}
 		}
+
+		frequencies[byteRead]--;		// Decrementa frequência do byte lido
+		freeHuffmanTree(&huffman);		// Limpa árvore
+	}
+
+	// Caso após a rotina anterior o buffer seja menor do que 8, isso significa o último byte não foi
+	// gravado, pois havia bits de padding. O trecho abaixo resolve isso
+	if (freeBufferBits < 8) {
+		fwrite(&buffer, 1, 1, output);
 	}
 }
 
 // Comprime um arquivo
 void compress(char *ifilename, char *ofilename) {	
-	unsigned int  code = 0;
-	unsigned char codeBits = 0;
-	unsigned char byte = 0;
-	unsigned char buffer = 0;
-	unsigned char bufferBits = 0;
-	unsigned char paddingBits = 0;
-	unsigned char headerFreqFieldSize = 0;
-	unsigned long maxFreq = 0;
-	unsigned long filesize = 0;
-	unsigned long frequencies[ALPHABET_SIZE];
-	struct HuffmanTree *huffman;
+	unsigned char byteRead = 0;					// Byte lido
+	unsigned char headerFreqFieldSize = 0;		// Define o tamanho do campo das frequências no cabeçalho
+	unsigned long maxFreq = 0;					// Frequência máxima entre os bytes
+	unsigned long frequencies[ALPHABET_SIZE];	// Array com a frequencia de cada byte
 	int i;
-	int j;
+	
 	FILE *input;
 	FILE *output;
 
 	if ((input = fopen(ifilename, "rb")) == NULL) {
-		printf("Erro ao abrir o arquivo de entrada\n");
-		printf("Abortando programa...\n");
-		exit(1);
+		#ifdef VERBOSE
+			printf("input file could not be opened\n");
+			printf("aborting program...\n");
+			exit(1);
+		#endif
 	}
 
 	if ((output = fopen(ofilename, "wb")) == NULL) {
-		printf("Erro ao abrir o arquivo de saída\n");
-		printf("Abortando programa...\n");
-		exit(1);
+		#ifdef VERBOSE
+			printf("output file could not be opened\n");
+			printf("aborting program...\n");
+			exit(1);
+		#endif
 	}
 	
-	// zera o array de frequências
+	// Zera o array de frequências
 	for (i = 0; i < ALPHABET_SIZE; i++) {
 		frequencies[i] = 0;
 	}
 	
 	// Lê cada byte no arquivo de entrada e incrementa suas frequências
-	while (fread(&byte, 1, 1, input)) {
-		filesize++;
-		frequencies[byte]++;
-		if (frequencies[byte] > maxFreq)
-			maxFreq = frequencies[byte];
+	while (fread(&byteRead, 1, 1, input)) {
+		frequencies[byteRead]++;
+		if (frequencies[byteRead] > maxFreq)
+			maxFreq = frequencies[byteRead];
 	}
 
 	// Verifica o valor da maior frequência e avalia em quantos bytes
@@ -345,137 +392,100 @@ void compress(char *ifilename, char *ofilename) {
 	else if (maxFreq <= ULONG_MAX) 
 		headerFreqFieldSize = (unsigned char) sizeof(unsigned long);
 	
-	printf("%lu\n", maxFreq);
-	printf("%d\n", headerFreqFieldSize);
-
 	// Escreve cabeçalho no arquivo de saída.
-	// O primeiro byte indica a quantidade de bits de padding no último byte
-	// Inicialmente esse valor é gravado como 0, mas depois que a compressão é
-	// feita e esse valor se torna conhecido, o programa volta para a primeira
-	// posição do arquivo e rescreve esse valor, se necessário. O segundo byte
-	// diz a quantidade de bytes que cada frequência precisa para ser armazenada 
-	// corretamente no cabeçalho. Os valores subsequentes são os valores das
-	// frequências para os cada um dos bytes possiveis, de 0 a 255.
-	fwrite(&paddingBits, 1, 1, output);	
+	// O primeiro byte indica a quantidade de bytes que cada frequência precisa 
+	// para ser armazenada corretamente no cabeçalho. Os valores subsequentes
+	// são os valores das frequências para os cada um dos bytes possiveis, de 0 a 255.
+	
 	fwrite(&headerFreqFieldSize, 1, 1, output);
 	for (i = 0; i < ALPHABET_SIZE; i++) {
 		fwrite(&frequencies[i], headerFreqFieldSize, 1, output);
 	}
 	
-	// Volta para o inicio do arquivo de entrada
+	#ifdef VERBOSE
+		struct HuffmanTree *huffman = buildHuffmanTree(frequencies);
+		printf("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
+		printf("Quantity of valid leafs:           %u\n", huffman->validLeafs);
+		printf("Maximum byte frequency:            %lu\n", maxFreq);
+		printf("Size of freq. field in the header: %u bytes\n\n", headerFreqFieldSize);
+		huffmanCodes(huffman);		
+		printf("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
+	#endif
+
+	// Volta para o início do arquivo de entrada
 	rewind(input);
+
+	#ifdef VERBOSE
+		printf("starting compression...\n");
+	#endif
+
+	encode(input, output, frequencies);
+
+	#ifdef VERBOSE
+		printf("compression finished...\n");
+	#endif
 	
-	code = 0;
-	codeBits = 0;
-	buffer = 0;
-	bufferBits = 0;
-	paddingBits = 8;
-
-	//huffman = buildHuffmanTree(frequencies);
-	//huffmanCodes(huffman);
-
-	// Rotina de compressão
-	while (fread(&byte, 1, 1, input)) {
-
-		huffman = buildHuffmanTree(frequencies);
-		//huffmanCodes(huffman);
-
-		code = 0;
-		codeBits = 0;
-		encode(&code, &codeBits, huffman->leaf[byte], NULL);
-		
-		while (1) {
-			if (paddingBits > codeBits) {
-				buffer |= code << (paddingBits - codeBits);
-				paddingBits -= codeBits;
-				break;
-			}
-			else if (paddingBits <= codeBits) {
-				buffer |= code >> (codeBits - paddingBits);
-				codeBits -= paddingBits;
-				// O buffer está cheio, hora de salvar
-				fwrite(&buffer, 1, 1, output);
-				paddingBits = 8;
-				buffer = 0;
-			}
-		}
-		
-		// gera nova arvore de huffman
-		frequencies[byte]--;
-		freeHuffmanTree(&huffman);
-	}
-
-	if (paddingBits < 8) {
-		fwrite(&buffer, 1, 1, output);
-		rewind(output);
-		fwrite(&paddingBits, 1, 1, output);
-	}
-
-	//freeHuffmanTree(&huffman);
 	fclose(input);
 	fclose(output);
 }
 
-bool isLeaf(struct Node *n) {
-	if ((n->left == NULL) && (n->right == NULL))
-		return true;
-	else
-		return false;
-}
-
+// Decodifica os bytes do arquivo
 void decode(FILE *input, FILE *output, unsigned long frequencies[]) {
-	unsigned char byteRead = 0;
-	unsigned char byteDecoded = 0;
-	unsigned char shiftedBits = 0;
-	unsigned char buffer = 0;
-	unsigned int  validLeafs = 0;
+	unsigned char byteRead = 0;				// Byte lido no arquivo de entrada
+	unsigned char byteDecoded = 0;			// Byte decodificado para ser gravado no arquivo de saída
+	unsigned char shiftedBits = 0;			// Bits deslocados
+	unsigned int  validLeafs = 0;			// Quantidade de folhas validas
 	struct HuffmanTree *huffman;
 	struct Node *actualNode;
 
 	huffman = buildHuffmanTree(frequencies);	// Constroi árvore de Huffman pela primeira vez
 	actualNode = huffman->root;					// Atribui o nó atual a raiz da árvore
-	validLeafs = huffman->validLeafs;
+	validLeafs = huffman->validLeafs;			
 	
-	fread(&byteRead, 1, 1, input);
-	buffer = byteRead;
-
+	fread(&byteRead, 1, 1, input);				// Lê o primeiro byte 
+	
 	do {
 		do {
-			if ((buffer >> 7 & 0x01) == 0)
-				actualNode = actualNode->left;
-			if ((buffer >> 7 & 0x01) == 1)
-				actualNode = actualNode->right;
-			buffer <<= 1;
-			shiftedBits++;
-		} while (!isLeaf(actualNode) && (shiftedBits < 8));
+			if ((byteRead >> 7 & 0x01) == 0)		// Verifica se o bit atual do byte lido é 0
+				actualNode = actualNode->left;		// Se for, desloca o nó atual para esquerda
+			if ((byteRead >> 7 & 0x01) == 1)		// Verifica se o bit atual do byte lido é 1
+				actualNode = actualNode->right;		// Se for, desloca o nó atual para esquerda
+			byteRead <<= 1;							// Desloca o byte em um bit para que o próximo 
+													// bit possa ser lido na próxima iteração
+			shiftedBits++;				
+		} while (!isLeaf(actualNode) && (shiftedBits < 8));		// Verifica se o nó atual não é uma folha 
+																// e se a quantidade de bits deslocados é
+																// menor que oito
 
+		// Caso o nó atual seja uma folha, é necessário obter o valor do byte decodificado
 		if (isLeaf(actualNode)) {
 			byteDecoded = actualNode->byte;
-			fwrite(&byteDecoded, 1, 1, output);
+			fwrite(&byteDecoded, 1, 1, output);			// Escreve byte
 			freeHuffmanTree(&huffman);					// Limpa árvore de Huffman	
 			frequencies[byteDecoded]--;					// Atualiza array de frequências
 
-			if (frequencies[byteDecoded] == 0)
-				validLeafs--;
-			if (validLeafs == 0)
-				return;
+			if (frequencies[byteDecoded] == 0)			// Se a frequência de determinado byte for zero...
+				validLeafs--;							// Decrementa a quantidade de folhas válidas...
+			if (validLeafs == 0)						// Se a quantidade de folhas válidas for zero...
+				return;									// Termina a função (isso faz com que não seja
+														// necessário se preocupar com os bits de padding)
 
 			huffman = buildHuffmanTree(frequencies);	// Reconstroi árvore de Huffman	
-			actualNode = huffman->root;			
+			actualNode = huffman->root;					// Atualiza nó atual para o nó raiz da nova ávore
 		}
-				
+		
+		// Caso a quantidade de bits deslocados tenha sido oito, é preciso ler outro byte
 		if (shiftedBits == 8) {
 			shiftedBits = 0;
 			fread(&byteRead, 1, 1, input);
-			buffer = byteRead;
 		}
 
-	} while (shiftedBits < 8);
+	} while ((shiftedBits < 8) && (byteRead != EOF));
 }
 
+// Descomprime arquivo
 void decompress(char *ifilename, char *ofilename) {
-	unsigned char paddingBits = 0;
-	unsigned char headerFreqFieldSize; 
+	unsigned char headerFreqFieldSize; 			
 	unsigned long frequencies[ALPHABET_SIZE];
 	int i;
 
@@ -483,18 +493,25 @@ void decompress(char *ifilename, char *ofilename) {
 	FILE *output;
 
 	if ((input = fopen(ifilename, "rb")) == NULL) {
-		printf("Erro ao abrir o arquivo de entrada\n");
-		printf("Abortando programa...\n");
-		exit(1);
+		#ifdef VERBOSE
+			printf("input file could not be opened\n");
+			printf("aborting program...\n");
+			exit(1);
+		#endif
 	}
 
 	if ((output = fopen(ofilename, "wb")) == NULL) {
-		printf("Erro ao abrir o arquivo de saída\n");
-		printf("Abortando programa...\n");
-		exit(1);
+		#ifdef VERBOSE
+			printf("output file could not be opened\n");
+			printf("aborting program...\n");
+			exit(1);
+		#endif
 	}
+	
+	#ifdef VERBOSE
+		printf("reading header from input file...\n");
+	#endif
 
-	fread(&paddingBits, 1, 1, input);
 	fread(&headerFreqFieldSize, 1, 1, input);
 	for (i = 0; i < ALPHABET_SIZE; i++) {
 		// É necessário zerar o valor antes, pois, caso contrário, os bytes
@@ -504,7 +521,24 @@ void decompress(char *ifilename, char *ofilename) {
 		fread(&frequencies[i], headerFreqFieldSize, 1, input);
 	}
 
+	#ifdef VERBOSE
+		struct HuffmanTree *huffman = buildHuffmanTree(frequencies);
+		printf("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
+		printf("Quantity of valid leafs:           %u\n", huffman->validLeafs);
+		printf("Size of freq. field in the header: %u bytes\n\n", headerFreqFieldSize);
+		huffmanCodes(huffman);		
+		printf("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
+	#endif
+
+	#ifdef VERBOSE
+		printf("starting decompression...\n");
+	#endif
+
 	decode(input, output, frequencies);
+
+	#ifdef VERBOSE
+		printf("decompression finished...\n");
+	#endif
 
 	fclose(input);
 	fclose(output);
